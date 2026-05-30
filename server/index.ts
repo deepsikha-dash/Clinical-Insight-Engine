@@ -26,9 +26,23 @@ declare module "express" {
 
 const PgSession = connectPgSimple(session);
 
+function getSessionSecret() {
+  const secret = process.env.SESSION_SECRET;
+
+  if (secret) {
+    return secret;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET is required in production.");
+  }
+
+  return "clinical-insight-engine-dev-secret";
+}
+
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "clinical-insight-engine-dev-secret",
+    secret: getSessionSecret(),
     resave: false,
     saveUninitialized: false,
     store: new PgSession({
