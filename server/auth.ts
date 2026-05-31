@@ -123,11 +123,6 @@ export function createAuthRouter(): Router {
       return res.status(400).json({ message: "Password must be at least 8 characters." });
     }
 
-    const existing = await storage.getUserByEmail(email);
-    if (existing) {
-      return res.status(409).json({ message: "An account with this email already exists." });
-    }
-
     // Check DB for existing user
     try {
       const db = getDb();
@@ -207,6 +202,16 @@ export function createAuthRouter(): Router {
     if (email === devEmail && password === devPassword) {
       userFullName = "Dr. Smith";
     } else {
+      try {
+        const db = getDb();
+        const [dbUser] = await db
+          .select()
+          .from(users)
+          .where(eq(users.email, email))
+          .limit(1);
+
+        if (dbUser && verifyPassword(password, dbUser.passwordHash)) {
+          userFullName = dbUser.fullName;
       // Check in-memory store (legacy)
       const registeredUser = registeredUsers.get(email);
       if (registeredUser && verifyPassword(password, registeredUser.passwordHash)) {
@@ -230,6 +235,8 @@ export function createAuthRouter(): Router {
           // DB not available — fall back to in-memory only
           console.warn("DB unavailable for login, using in-memory only.");
         }
+      } catch (err) {
+        console.warn("DB unavailable for login.");
       }
     }
 
@@ -288,7 +295,12 @@ export function createAuthRouter(): Router {
       name = "Dr. Smith";
       id = "dev";
     } else {
-      const user = await storage.getUserByEmail(email);
+      const db = getDb();
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
       if (!user) {
         return res.status(404).json({ message: "User not found." });
       }

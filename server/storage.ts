@@ -9,6 +9,7 @@ import {
   type User,
   type InsertUser
 } from "@shared/schema";
+import { and, desc, eq } from "drizzle-orm";
 
 
 
@@ -40,14 +41,19 @@ export class DatabaseStorage implements IStorage {
   ): Promise<Assessment[]> {
     const db = getDb();
 
-    let query = db
+    const filters: any[] = [];
+    if (createdBy) {
+      filters.push(eq(assessments.createdBy, createdBy));
+    }
+
+    const query = db
       .select()
       .from(assessments)
       .orderBy(desc(assessments.createdAt))
       .$dynamic();
 
-    if (createdBy) {
-      query = query.where(eq(assessments.createdBy, createdBy));
+    if (filters.length > 0) {
+      return await query.where(and(...filters)).limit(limit).offset(offset);
     }
 
     return await query.limit(limit).offset(offset);
