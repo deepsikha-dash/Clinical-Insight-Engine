@@ -63,4 +63,13 @@ describe("insertAssessmentSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects missing patient name", () => {
+    const result = insertAssessmentSchema.safeParse({
+      ...validAssessment,
+      patientName: "",
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

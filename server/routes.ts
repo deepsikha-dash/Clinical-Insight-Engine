@@ -79,6 +79,7 @@ async function seedDatabase() {
     const samples: AssessmentCreateInput[] = [
       {
         createdBy: seedUserId,
+        patientName: "John Doe",
         gender: "Male",
         age: 45,
         hypertension: false,
@@ -100,6 +101,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Mary Johnson",
         gender: "Female",
         age: 62,
         hypertension: true,
@@ -121,6 +123,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Robert Chen",
         gender: "Male",
         age: 58,
         hypertension: true,
@@ -142,6 +145,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Aisha Patel",
         gender: "Female",
         age: 22,
         hypertension: false,
@@ -162,6 +166,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Michael Brown",
         gender: "Male",
         age: 30,
         hypertension: false,
@@ -181,6 +186,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Sofia Garcia",
         gender: "Female",
         age: 35,
         hypertension: false,
@@ -200,6 +206,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "David Wilson",
         gender: "Male",
         age: 45,
         hypertension: true,
@@ -220,6 +227,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Linda Martinez",
         gender: "Female",
         age: 50,
         hypertension: false,
@@ -240,6 +248,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "James Anderson",
         gender: "Male",
         age: 40,
         hypertension: false,
@@ -259,6 +268,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Patricia Lee",
         gender: "Female",
         age: 65,
         hypertension: true,
@@ -279,6 +289,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "William Taylor",
         gender: "Male",
         age: 72,
         hypertension: true,
@@ -299,6 +310,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Daniel Thomas",
         gender: "Male",
         age: 55,
         hypertension: false,
@@ -319,6 +331,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Elizabeth White",
         gender: "Female",
         age: 78,
         hypertension: false,
@@ -338,6 +351,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Jennifer Clark",
         gender: "Female",
         age: 28,
         hypertension: false,
@@ -357,6 +371,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Matthew Lewis",
         gender: "Male",
         age: 33,
         hypertension: true,
@@ -376,6 +391,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Christopher Harris",
         gender: "Male",
         age: 25,
         hypertension: false,
@@ -396,6 +412,7 @@ async function seedDatabase() {
       },
       {
         createdBy: seedUserId,
+        patientName: "Barbara Moore",
         gender: "Female",
         age: 61,
         hypertension: true,

@@ -10,6 +10,7 @@ export type AssessmentFactor = {
 
 export const assessments = pgTable("assessments", {
   id: serial("id").primaryKey(),
+  patientName: text("patient_name"),
   gender: text("gender").notNull(), // 'Male', 'Female'
   age: integer("age").notNull(),
   hypertension: boolean("hypertension").notNull(),
