@@ -782,6 +782,7 @@ export async function registerRoutes(
         );
         logAccessAttempt(req.session.user!.id, "Assessments", "search", true, "Searched assessments");
         return res.json(results);
+
       } catch (err) {
         console.error("Assessment search error:", err);
         const { statusCode, message } = sanitizeDatabaseError(err);
