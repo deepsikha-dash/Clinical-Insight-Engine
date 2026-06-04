@@ -718,8 +718,9 @@ export default function History() {
 }
 
 
-// GSSoC Issue #689 Patch
-  // GSSoC Issue #689 search filters
+
+import { format, isValid } from "date-fns";
+
   const filteredAssessments = assessments?.filter(a => {
       const term = searchTerm.toLowerCase();
       return (
