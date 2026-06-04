@@ -4,6 +4,7 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import {
   assessments,
   users,
+  loginAuditLogs,
   type Assessment,
   type InsertAssessment,
   type AssessmentFactor,
@@ -15,10 +16,6 @@ import type { RiskCategory } from "./validation/searchValidation";
 export interface IStorage {
   getAssessments(limit?: number, offset?: number, createdBy?: string): Promise<{ data: Assessment[]; total: number; page: number; totalPages: number }>;
   createAssessment(assessment: AssessmentCreateInput): Promise<Assessment>;
- /**
-   * Searches assessments by risk category label using parameterized queries.
-   * Uses Drizzle ORM eq() — user input is NEVER interpolated into SQL strings.
-   */
   searchAssessments(
     searchTerm: string,
     createdBy?: string,
@@ -26,12 +23,17 @@ export interface IStorage {
     limit?: number,
     offset?: number
   ): Promise<Assessment[]>;
-  /** Returns a single assessment by numeric ID. Authorization must be checked by caller. */
   getAssessmentById(id: number): Promise<Assessment | undefined>;
   createAssessment(assessment: AssessmentCreateInput): Promise<Assessment>;
   createUser(data: InsertUser): Promise<User>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserById(id: string): Promise<User | undefined>;
+  recordLoginAudit(params: {
+    userId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    loginStatus: string;
+  }): Promise<void>;
   getAnalyticsStats(createdBy?: string): Promise<any>;
 }
 
@@ -225,6 +227,19 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async recordLoginAudit(params: {
+    userId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    loginStatus: string;
+  }): Promise<void> {
+    const db = getDb();
+    await db.insert(loginAuditLogs).values({
+      userId: params.userId ?? null,
+      ipAddress: params.ipAddress ?? null,
+      userAgent: params.userAgent ?? null,
+      loginStatus: params.loginStatus,
+    });
   async getAnalyticsStats(createdBy?: string) {
     const db = getDb();
     const filters: ReturnType<typeof eq>[] = [];
