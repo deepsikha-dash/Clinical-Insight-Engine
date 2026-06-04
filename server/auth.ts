@@ -7,6 +7,7 @@ import { storage } from "./storage";
 import { getDb } from "./db";
 import { users, emailVerificationTokens, passwordResetTokens } from "@shared/schema";
 import { sendVerificationCode } from "./email";
+import { logger } from "./logger";
 // Extend express-session to include user data
 declare module "express-session" {
   interface SessionData {
@@ -142,7 +143,7 @@ function generateOtp(): string {
 
 function logDevOtp(email: string, otp: string) {
   if (process.env.NODE_ENV !== "production") {
-    console.log(`[DEV] OTP for ${email}: ${otp}`);
+    logger.info(`[DEV] OTP for ${email}: ${otp}`);
   }
 }
 
@@ -292,7 +293,7 @@ export function createAuthRouter(): Router {
 
       return res.status(201).json({ success: true, pendingEmail: email, ...(process.env.NODE_ENV !== "production" && { devOtp: otp }) });
     } catch (err) {
-      console.error("Registration error:", err);
+      logger.error({ err }, "Registration error");
       return res.status(500).json({ message: "Registration failed due to a server error." });
     }
   });
@@ -318,25 +319,26 @@ export function createAuthRouter(): Router {
       userName = registeredUser.fullName;
     }
 
-    // Also check DB
-    if (!userName) {
-      try {
-        const db = getDb();
-        const [dbUser] = await db
-          .select()
-          .from(users)
-          .where(eq(users.email, email))
-          .limit(1);
+      // Also check DB
+      if (!userName) {
+        try {
+          const db = getDb();
+          const [dbUser] = await db
+            .select()
+            .from(users)
+            .where(eq(users.email, email))
+            .limit(1);
 
-        if (dbUser && verifyPassword(password, dbUser.passwordHash)) {
-          userName = dbUser.fullName;
-        }
-      } catch (_err) {
-        // DB not available — fall back to in-memory only
-        console.warn("DB unavailable for login, using in-memory only.");
-        const registeredUser = registeredUsers.get(email);
-        if (registeredUser && verifyPassword(password, registeredUser.passwordHash)) {
-          userName = registeredUser.fullName;
+          if (dbUser && verifyPassword(password, dbUser.passwordHash)) {
+            userName = dbUser.fullName;
+          }
+        } catch (_err) {
+          // DB not available — fall back to in-memory only
+          logger.warn("DB unavailable for login, using in-memory only.");
+          const registeredUser = registeredUsers.get(email);
+          if (registeredUser && verifyPassword(password, registeredUser.passwordHash)) {
+            userName = registeredUser.fullName;
+          }
         }
       }
     }
@@ -447,7 +449,7 @@ export function createAuthRouter(): Router {
     try {
       await establishAuthenticatedSession(req, { id, email, name, role, emailVerified });
     } catch (error) {
-      console.error("Session regeneration failed:", error);
+      logger.error({ err: error }, "Session regeneration failed");
       return res.status(500).json({ message: "Failed to establish session." });
     }
 
@@ -575,7 +577,7 @@ export function createAuthRouter(): Router {
 
       return res.json({ success: true, message: "Email verified successfully." });
     } catch (err) {
-      console.error("Email verification error:", err);
+      logger.error({ err }, "Email verification error");
       return res.status(500).json({ message: "Verification failed due to a server error." });
     }
   });
@@ -593,7 +595,7 @@ export function createAuthRouter(): Router {
 
     req.session.destroy((err) => {
       if (err) {
-        console.error("Session destruction failed:", err);
+        logger.error({ err }, "Session destruction failed");
         return res.status(500).json({ message: "Failed to logout." });
       }
       res.clearCookie("connect.sid");

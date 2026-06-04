@@ -521,7 +521,6 @@ def interpret_prediction(model, scaler, features, input_data, cov_beta=None):
         "confidenceInterval": confidence_interval,
         "modelConfidence": round(float(max(prob, 1 - prob)), 4)
     }
-
     # If the submitted gender value is outside the model's training distribution,
     # attach a warning so clinicians are aware the demographic was not represented
     # in training data and the result should be interpreted with caution.
