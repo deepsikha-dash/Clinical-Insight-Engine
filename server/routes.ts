@@ -42,7 +42,76 @@ async function seedDatabase() {
     logger.warn("[DEV] Using default admin credentials. Set ADMIN_EMAIL and ADMIN_PASSWORD env vars for production.");
   }
 
-  const existingAdmin = await storage.getUserByEmail(email);
+  return pythonPredictionSchema.parse(parsed);
+}
+
+function canonicalStringify(obj: unknown): string {
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return "[" + obj.map(canonicalStringify).join(",") + "]";
+  }
+  const keys = Object.keys(obj as Record<string, unknown>).sort();
+  const pairs = keys.map((k) => JSON.stringify(k) + ":" + canonicalStringify((obj as Record<string, unknown>)[k]));
+  return "{" + pairs.join(",") + "}";
+}
+
+function generateRequestFingerprint(payload: unknown, userId: string): string {
+  const uid = userId || "anonymous";
+  return createHash("sha256")
+    .update(`${uid}::${canonicalStringify(payload)}`)
+    .digest("hex");
+}
+
+// ESM-compatible path resolution for analyze.py
+// Resolve relative to this source file, not process.cwd()
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const analyzePyPath = path.resolve(__dirname, "..", "analyze.py");
+
+/**
+ * Rate limiter for the ML assessment endpoint.
+ * Limits to 5 requests per minute per IP to prevent DoS attacks.
+ */
+const assessmentLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  limit: 5, // 5 requests per IP per window
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: {
+    error: "Too many assessment requests. Please try again later.",
+    retryAfter: 60, // seconds
+  },
+});
+
+const previewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: {
+    error: "Too many assessment preview requests. Please try again later.",
+    retryAfter: 60,
+  },
+});
+
+export function getPythonExecutable() {
+  const candidates = process.platform === "win32"
+    ? [
+        path.resolve(".venv", "Scripts", "python.exe"),
+        path.resolve("venv", "Scripts", "python.exe")
+      ]
+    : [
+        path.resolve(".venv", "bin", "python"),
+        path.resolve("venv", "bin", "python")
+      ];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? "python3";
+}
+
+async function seedDatabase() {
+  const existingAdmin = await storage.getUserByEmail("admin@clinical-insight-engine.dev");
   if (!existingAdmin) {
     const adminPasswordHash = bcrypt.hashSync(password, 10);
     await storage.createUser({
@@ -142,6 +211,7 @@ interface PredictionResult {
 
 function calculateClinicalFallback(input: any): PredictionResult {
   let points = 0;
+
   const factors: Array<{ name: string; impact: "positive" | "negative"; description: string }> = [];
 
   const age = Number(input.age) || 0;
@@ -282,7 +352,20 @@ export async function registerRoutes(
   });
 
   // Mount domain-specific routers
-  app.use("/api/assessments", generalLimiter, analyticsRouter);
+  app.use("/api/auth", authRouter);
+  app.use("/api/assessments", assessmentsRouter);
+  // Issue a JWT token for the currently authenticated session user
+  app.get("/api/auth/token", requireAuth, requireVerified, (req, res) => {
+    // Session is guaranteed by requireAuth
+    const user = req.session.user;
+    if (!user || !user.id || !user.email) {
+      return res.status(401).json({ message: "Invalid session user data" });
+    }
+    const token = issueToken(user.id, user.email, "provider");
+    res.json({ token });
+  });
+
+  // ── Preview assessment (no save) ────────────────────────────────────────────
   app.use("/api/assessments", mlRouter);
   app.use("/api/assessments", exportsRouter);
   app.use("/api/assessments", analyticsRouter);
@@ -307,6 +390,7 @@ export async function registerRoutes(
           const { stdout, stderr } = await execFileAsync(
             getPythonExecutable(),
             [analyzePyPath, "predict_file", tempFile],
+            { timeout: 30000, maxBuffer: 10 * 1024 * 1024 }
             {
               timeout: 30000
             }
@@ -343,6 +427,7 @@ export async function registerRoutes(
         logger.error({ err }, "Error creating assessment preview");
         return res.status(500).json({ message: "Internal server error" });
       } finally {
+        try { await unlink(tempFile); } catch { /* ignore */ }
         try {
           await unlink(tempFile);
         } catch (e) {
@@ -352,6 +437,7 @@ export async function registerRoutes(
     }
   );
 
+  // ── Create assessment ───────────────────────────────────────────────────────
   app.post(
     api.assessments.simulate.path,
     requireAuth,
@@ -434,19 +520,50 @@ export async function registerRoutes(
         const input = api.assessments.create.input.parse(req.body);
         requestFingerprint = generateRequestFingerprint(input, userId);
 
-        if (MLService.activeInferenceRequests.has(requestFingerprint)) {
-          return res.status(409).json({ message: "Assessment request is already being processed." });
+        if (activeInferenceRequests.has(requestFingerprint)) {
+          return res.status(409).json({ message: "An identical assessment request is already being processed." });
         }
-        MLService.activeInferenceRequests.add(requestFingerprint);
-        didAdd = true;
+        activeInferenceRequests.add(requestFingerprint);
 
-        const queue = getAssessmentQueue();
-        if (!queue) {
-          return res.status(503).json({
-            message: "Assessment queue is temporarily unavailable.",
-          });
+        tempFile = path.join(os.tmpdir(), `${randomUUID()}.json`);
+        await writeFile(tempFile, JSON.stringify(input));
+
+        let prediction: any;
+        let isFallback = false;
+
+        try {
+          const { stdout } = await execFileAsync(
+            getPythonExecutable(),
+            [analyzePyPath, "predict_file", tempFile],
+            { timeout: 30000, maxBuffer: 10 * 1024 * 1024 }
+          );
+          prediction = JSON.parse(stdout.trim());
+          if (prediction?.error) {
+            return res.status(400).json({ message: prediction.error });
+          }
+        } catch (error: any) {
+          if (error?.killed || error?.signal === "SIGTERM") {
+            return res.status(408).json({ message: "Clinical assessment generation timed out." });
+          }
+          prediction = calculateClinicalFallback(input);
+          isFallback = true;
         }
-        const job = await queue.add("predict", {
+
+        prediction.disclaimer =
+          "DISCLAIMER: This is a clinical decision support tool and is not a medical diagnosis. Please consult with a healthcare professional for clinical decisions." +
+          (isFallback ? " (Generated via fallback rule-based clinical support model due to system unavailability)" : "");
+
+        const assessment = await storage.createAssessment({
+          ...input,
+          riskScore: Number(prediction.riskScore),
+          riskCategory: prediction.riskCategory,
+          factors: prediction.factors,
+          confidenceInterval: prediction.confidenceInterval ?? null,
+          modelConfidence: prediction.modelConfidence == null ? undefined : Number(prediction.modelConfidence),
+          createdBy: userId,
+        const requestFingerprint = generateRequestFingerprint(input, userId);
+        
+        const job = await assessmentQueue.add("predict", {
           input,
           userId,
           requestFingerprint
@@ -458,6 +575,25 @@ export async function registerRoutes(
         });
       } catch (err) {
         if (err instanceof z.ZodError) {
+          return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid input" });
+        }
+        console.error("Error creating assessment:", err);
+        return res.status(500).json({ message: "Failed to generate clinical assessment." });
+      } finally {
+        if (tempFile) { try { await unlink(tempFile); } catch { /* ignore */ } }
+        if (requestFingerprint) { activeInferenceRequests.delete(requestFingerprint); }
+      }
+    },
+  );
+
+  // ── List assessments ────────────────────────────────────────────────────────
+  app.get(api.assessments.list.path, requireAuth, requireVerified, async (req, res) => {
+    try {
+      const userEmail = req.session.user?.email;
+      const assessments = await storage.getAssessments(50, 0, userEmail);
+      return res.json(assessments);
+    } catch (err) {
+      return res.status(500).json({ message: "Failed to fetch assessments" });
           return res.status(400).json({
             message: err.errors[0].message
           });
@@ -474,12 +610,19 @@ export async function registerRoutes(
     }
   );
 
+  // ── Export CSV ──────────────────────────────────────────────────────────────
   app.get(
     "/api/assessments/jobs/:id",
     requireAuth,
     requireVerified,
     async (req, res) => {
       try {
+        const userEmail = req.session.user?.email;
+        const assessments = await storage.getAssessments(1000, 0, userEmail);
+        const csv = assessmentsToCsv(assessments as unknown as Record<string, unknown>[]);
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", "attachment; filename=assessments.csv");
+        return res.send(csv);
         const jobId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
         const queue = getAssessmentQueue();
         if (!queue) {
@@ -503,6 +646,90 @@ export async function registerRoutes(
     }
   );
 
+  // ── Search assessments ──────────────────────────────────────────────────────
+  /**
+   * GET /api/assessments/search
+   *
+   * Security controls:
+   * 1. PRIMARY: Drizzle ORM ilike()/eq() — bound placeholders, never raw SQL interpolation.
+   * 2. SUPPLEMENTARY: Zod schema validates length, character set, rejects injection patterns.
+   * 3. Security logging: suspicious patterns logged (without PHI) for audit.
+   * 4. User scoping: results always filtered to the authenticated user's records.
+   * 5. Generic errors: DB errors sanitized — no table names or SQL syntax leaked.
+   *
+   * Query params:
+   *   q            - search term (max 200 chars, safe characters only)
+   *   riskCategory - optional: LOW | MODERATE | HIGH
+   *   page         - page number (default 1)
+   *   limit        - results per page, max 100 (default 20)
+   */
+  app.get(
+    "/api/assessments/search",
+    requireAuth,
+    requireVerified,
+    async (req, res) => {
+      try {
+        // 1. Validate and parse query parameters
+        const parseResult = searchQuerySchema.safeParse(req.query);
+
+        if (!parseResult.success) {
+          const rawQ = typeof req.query.q === "string" ? req.query.q : "";
+          const analysis = analyzeSearchInput(rawQ);
+
+          if (!analysis.safe) {
+            logSecurityEvent(
+              "SQL_INJECTION_ATTEMPT",
+              "Injection-like pattern detected in search query parameter",
+              req,
+              { matchedPattern: analysis.pattern, userId: req.session.user?.id }
+            );
+          } else {
+            logSecurityEvent(
+              "MALFORMED_SEARCH_QUERY",
+              "Search query failed validation",
+              req,
+              { userId: req.session.user?.id }
+            );
+          }
+
+          return res.status(400).json({
+            message: parseResult.error.errors[0]?.message ?? "Invalid search parameters.",
+          });
+        }
+
+        const { q, riskCategory, page, limit } = parseResult.data;
+        const offset = (page - 1) * limit;
+        const userEmail = req.session.user?.email;
+
+        // 2. Log suspicious-but-valid patterns for monitoring
+        if (q) {
+          const analysis = analyzeSearchInput(q);
+          if (!analysis.safe) {
+            logSecurityEvent(
+              "SUSPICIOUS_SEARCH_PATTERN",
+              "Validated search term contains a suspicious pattern",
+              req,
+              { matchedPattern: analysis.pattern, userId: req.session.user?.id }
+            );
+          }
+        }
+
+        // 3. Execute parameterized search + count in parallel
+        const [results, total] = await Promise.all([
+          storage.searchAssessments(q ?? "", userEmail, riskCategory, limit, offset),
+          storage.countAssessments(q ?? "", userEmail, riskCategory),
+        ]);
+
+        return res.json({
+          data: results,
+          total,
+          page,
+          limit,
+          hasMore: offset + results.length < total,
+        });
+
+      } catch (err) {
+        console.error("Assessment search error:", err);
   app.post(
     "/api/assessments/bulk",
     requireAuth,
@@ -710,6 +937,12 @@ export async function registerRoutes(
     }
   );
 
+  // ── Get single assessment by ID ─────────────────────────────────────────────
+  /**
+   * GET /api/assessments/:id
+   *
+   * Security: Drizzle ORM eq() with bound parameters.
+   * Object-Level Authorization checked via canAccessPatientRecord.
   app.get(
     "/api/assessments/analytics",
     requireAuth,
@@ -741,6 +974,7 @@ export async function registerRoutes(
     requireVerified,
     async (req, res) => {
       try {
+        const id = parseInt(req.params.id as string, 10);
         const paramId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
         const id = parseInt(paramId as string, 10);
 
@@ -759,6 +993,7 @@ export async function registerRoutes(
           return res.status(404).json({ message: "Assessment not found." });
         }
 
+        if (!canAccessPatientRecord(user as Parameters<typeof canAccessPatientRecord>[0], assessment)) {
         // Object-Level Authorization Check
         if (!canAccessPatientRecord(user as any, assessment)) {
           // Log unauthorized access attempt (IDOR/Enumeration attempt)
@@ -769,6 +1004,11 @@ export async function registerRoutes(
             false,
             "IDOR attempt: User not authorized to access this patient record"
           );
+          return res.status(404).json({ message: "Assessment not found." });
+        }
+
+        logAccessAttempt(user.id, "Assessment", id, true, "Authorized access");
+        return res.json(assessment);
           
           // Return 404 to prevent ID enumeration
           return res.status(404).json({ message: "Assessment not found." });
@@ -828,6 +1068,10 @@ export async function registerRoutes(
       logger.error({ err }, "Admin user update error:");
       res.status(500).json({ message: "Failed to update user." });
     }
+  );
+
+  return httpServer;
+}
   });
 
   app.get("/api/admin/stats", requireAuth, requireAdmin, async (req, res) => {
