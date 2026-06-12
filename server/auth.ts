@@ -339,6 +339,28 @@ export function createAuthRouter(): Router {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     try {
+      if (mode === "login") {
+        const pending = pendingOtps.get(email);
+
+        if (!pending) {
+          return res.status(400).json({ message: "No pending verification found for this email. Please sign in again." });
+        }
+
+        if (Date.now() > pending.expiresAt) {
+          pendingOtps.delete(email);
+          return res.status(400).json({ message: "OTP has expired. Please sign in again." });
+        }
+
+        pendingOtps.set(email, { otp, expiresAt: expiresAt.getTime(), attempts: 0 });
+        const emailSent = await sendVerificationCode(email, otp);
+        if (!emailSent) {
+          return res.status(503).json({ message: "Failed to send verification email. Please try again." });
+        }
+        logDevOtp(email, otp);
+
+        return res.json({ success: true, pendingEmail: email });
+      }
+
       const db = getDb();
       const [user] = await db
         .select()
