@@ -11,6 +11,7 @@ import { MLService, generateRequestFingerprint, calculateClinicalFallback, getPy
 import { storage, type AssessmentCreateInput } from "./storage";
 import { requireAuth, requireAdmin, requireVerified } from "./auth";
 import bcrypt from "bcrypt";
+import { logger } from "./logger";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import os from "os";
@@ -28,7 +29,8 @@ import {
   adminLimiter,
 } from "./middleware/rateLimit";
 import { rateLimit } from "express-rate-limit";
-import { getAssessmentQueue } from "./queue";
+import { MLService, calculateClinicalFallback, generateRequestFingerprint } from "./services/mlService";
+import { getAssessmentQueue, getPythonExecutable } from "./queue";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { z } from "zod";
@@ -39,6 +41,11 @@ import { randomUUID } from "crypto";
 import { writeFile, unlink } from "fs/promises";
 import { fileURLToPath } from "url";
 import bcrypt from "bcrypt";
+import os from "os";
+import { randomUUID } from "crypto";
+import { writeFile, unlink } from "fs/promises";
+import { z } from "zod";
+import { api } from "../shared/routes";
 import { validateDTO } from "./middleware/validateDTO";
 import { z } from "zod";
 import { api } from "@shared/routes";
@@ -60,15 +67,17 @@ function execFileAsync(file: string, args: string[], options: any): Promise<{ st
 import { api } from "@shared/routes";
 import { getPythonExecutable, calculateClinicalFallback, generateRequestFingerprint, MLService } from "./services/mlService";
 import { validateDTO } from "./middleware/validateDTO";
-import { getAssessmentQueue } from "./queue";
 import { assessmentsToCsv } from "./utils/csvExport";
 import { searchQuerySchema } from "./validation/searchValidation";
 import { analyzeSearchInput, logSecurityEvent, sanitizeDatabaseError } from "./security/sqlProtection";
 import { canAccessPatientRecord } from "./services/authz/patient-access";
 import { logAccessAttempt } from "./security/access-audit";
 
-function execFileAsync(file: string, args: string[], options: { timeout: number; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const analyzePyPath = path.resolve(__dirname, "..", "analyze.py");
 
+function execFileAsync(file: string, args: string[], options: any): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
       if (error) {
