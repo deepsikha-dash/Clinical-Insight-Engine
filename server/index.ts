@@ -30,6 +30,7 @@ import {
 } from "./queue";
 import { EmailConfigurationError, validateEmailConfig } from "./email";
 import { generalLimiter } from "./middleware/rateLimit";
+import { registerOpenApiDocs } from "./openapi";
 
 
 const app = express();
@@ -192,6 +193,8 @@ app.use((req, res, next) => {
 
   next();
 });
+
+registerOpenApiDocs(app);
 
 (async () => {
   try {
