@@ -468,29 +468,22 @@ describe("Python inference", () => {
   it("preview returns 503 when Python process times out", async () => {
     const app = createAuthenticatedApp();
     await registerRoutes(createServer(), app);
-
-    const origExecFile = mockExecFile;
-    mockExecFile.mockImplementation((cmd, args, opts, cb) => {
-      if (typeof opts === "function") {
-        cb = opts;
-        const err: any = new Error("Process timed out");
-        err.killed = true;
-        err.signal = "SIGTERM";
-        cb(err, null, null);
-        return;
-      }
-      const err: any = new Error("Process timed out");
-      err.killed = true;
-      err.signal = "SIGTERM";
-      cb(err, null, null);
-    });
-
-    const res = await request(app)
+    const predictSpy = vi
+    .spyOn(pythonDaemon, "predict")
+    .mockRejectedValue(new Error("Clinical assessment timed out."));
+    
+    try {
+      const res = await request(app)
       .post("/api/assessments/preview")
       .send(validPayload);
+      
+      expect(predictSpy).toHaveBeenCalledTimes(1);
 
-    expect(res.status).toBe(503);
-    expect(res.body.message).toContain("timed out");
+      expect(res.status).toBe(503);
+      expect(res.body.message).toContain("timed out");
+    } finally {
+      predictSpy.mockRestore();
+    }
   });
 
   it("bulk route returns 201 and falls back to rule-based model on python process failure", async () => {
